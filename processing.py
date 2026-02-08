@@ -127,7 +127,7 @@ class Processing:
         nodes = self.nodes
         rev_if_neg = lambda x: nodes[-x][::-1] if x < 0 else nodes[x]
         ref_contig, start, end = ref_key
-        score = threshold + match_score * 2
+        score: int = threshold + match_score * 2
         stack: List[int] = []
         for k in range(i, len(walk)):
             if abs(walk[k]) in nodes_rf:
@@ -139,9 +139,9 @@ class Processing:
             stack.append(walk[k])
         while abs(stack[-1]) not in nodes_rf:
             stack.pop()
-        seq_parts = []
-        node_spans = []
-        cursor = 0
+        seq_parts: List[str] = []
+        node_spans: List[Tuple[int, int, int]] = []
+        cursor: int = 0
         for x in stack:
             s = rev_if_neg(x)
             seq_parts.append(s)
@@ -199,13 +199,8 @@ class Processing:
         paths_seqs: Dict[Tuple[str, int, int], Dict[str, Tuple[str, List[Tuple[int, int, int]]]]] = {}
         for ref_key, nodes_rf in self.repeat_nodes.items():
             ref_contig, start, end = ref_key
-            visited: Set[Tuple[int, int]] = set()  # avoid duplicate evaluations
             for node in nodes_rf:
                 for walk, i, start_w, contig in node_occurrences.get(node, []):
-                    key = (id(walk), i)
-                    if key in visited:
-                        continue
-                    visited.add(key)
                     self._evaluate(
                         i=i,
                         walk=walk,
@@ -226,43 +221,43 @@ class Processing:
                     file=log
                 )
 
-                flanks = self.flanking_nodes[key]
-                blocks = []
+                flanks: Tuple[int, int, int, int] = self.flanking_nodes[key]
+                blocks: List[Tuple[str, str, str, str]] = []
 
                 for contig, (seq, node_spans) in info.items():
-                    split = self.split_by_flanks(seq, node_spans, flanks)
+                    split: Tuple[str, str, str] = self.split_by_flanks(seq, node_spans, flanks)
                     if split is None:
                         continue
                     blocks.append((*split, contig))
 
-                self.pretty_print(blocks, log)
+                self.pretty_print(blocks, key, paths, log=log)
 
     def split_by_flanks(self, seq, node_spans, flanks):
         left_node, left_off, right_node, right_off = flanks
-
-        repeat_start = len(self.nodes[left_node]) - left_off
+        repeat_start = left_off
         repeat_end = len(seq)
 
         for node, s, e in node_spans:
             if node == right_node:
-                repeat_end = e - right_off
-
-        if repeat_start is None or repeat_end is None:
-            return None  # cannot split cleanly
-
+                repeat_end = s + right_off
         left = seq[:repeat_start]
         repeat = seq[repeat_start:repeat_end]
         right = seq[repeat_end:]
-
         return left, repeat, right
 
-    def pretty_print(self, blocks, log):
-        max_left = max(len(l) for l, _, _, _ in blocks)
-        max_rep = max(len(r) for _, r, _, _ in blocks)
+    def pretty_print(self, blocks: List[Tuple[str, str, str, str]], ref_key: Tuple[str, int, int],
+                     paths: Dict[Tuple[str, int, int], Dict[str, Tuple[int, int]]], log):
+        max_left: int = max(len(l) for l, _, _, _ in blocks)
+        max_rep: int = max(len(r) for _, r, _, _ in blocks)
+        ref = ref_key[0]
 
         for left, rep, right, contig in blocks:
+            if contig == ref:
+                continue
+            true_start: int = paths[ref_key][contig][0] + len(left)
+            true_end: int = paths[ref_key][contig][1] - len(right)
             print(
-                f"Found in {contig} :\n",
+                f"Found in {contig} at [ {true_start}, {true_end} ]:\n",
                 f"{left:>{max_left}}  "
                 f"{rep:<{max_rep}}  "
                 f"{right}",

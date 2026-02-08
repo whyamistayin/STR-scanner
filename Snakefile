@@ -68,3 +68,7 @@ rule analyze:
           --repeats {input.tandems} \
           --log {output.log} \
         """
+
+rule all:
+    output:
+        "results/repeats_aligned.txt"
