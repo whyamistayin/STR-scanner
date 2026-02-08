@@ -1,5 +1,5 @@
 import argparse
-from typing import Tuple, List, Dict, Set
+from typing import Tuple, List, Dict, Set, Optional
 from collections import defaultdict
 
 class Processing:
@@ -22,7 +22,7 @@ class Processing:
     
     __repr__ = __str__
 
-    def parse_walk(self, walk: str) -> List[int]:
+    def _parse_walk(self, walk: str) -> List[int]:
         state: int = 0 # 0 is determining direction, 1 reads number
         direction: int = 1
         read: str = ""
@@ -55,7 +55,7 @@ class Processing:
                 self.nodes[id] = contains
             elif line.startswith("W"):
                 ref, _, con, st, end, walk = line.split()[1:]
-                processed = self.parse_walk(walk)
+                processed = self._parse_walk(walk)
                 #print(processed)
                 if (ref, con) not in self.walks:
                     self.walks[ref, con] = {(int(st), int(end)): processed[:]}
@@ -94,7 +94,7 @@ class Processing:
         while i_iter > -1 and self._overlaps(start, end, i_iter):
             output_nodes2.append(self.nodes_ref_list[i_iter][0])
             i_iter -= 1
-        return set(output_nodes)|set(output_nodes2), (output_nodes2[0] if output_nodes2 else output_nodes[0],
+        return set(output_nodes+output_nodes2), (output_nodes2[-1] if output_nodes2 else output_nodes[0],
                                                       output_nodes[-1])
 
 
@@ -162,27 +162,6 @@ class Processing:
                 paths[ref_contig, start, end][contig] = (current_start, current_end)
                 paths_seqs[ref_contig, start, end][contig] = (seq, node_spans)
 
-    def _scan_walk_for_repeat(
-            self,
-            walk: List[int],
-            nodes_rf: Set[int],
-            start_w: int,
-            ref_key,
-            paths,
-            paths_seqs,
-            contig,
-            threshold,
-            match_score,
-            mismatch_penalty,
-    ):
-        current = start_w
-        for i, node in enumerate(walk):
-            if node in nodes_rf:
-                self._evaluate(
-                    i, walk, threshold, match_score, mismatch_penalty,
-                    nodes_rf, current, ref_key, paths, paths_seqs, contig
-                )
-                return
 
     def analysis(
             self,
@@ -217,29 +196,42 @@ class Processing:
         with open(self.l, 'w') as log:
             for key, info in paths_seqs.items():
                 print(
-                    f"\nTandem repeat in {key[0]} at [ {key[1]}, {key[2]} ]:",
+                    f"Tandem repeat in {key[0]} at [ {key[1]}, {key[2]} ]:",
                     file=log
                 )
 
                 flanks: Tuple[int, int, int, int] = self.flanking_nodes[key]
                 blocks: List[Tuple[str, str, str, str]] = []
+                ref_ind: Optional[int] = None
 
+                ind: int = 0
                 for contig, (seq, node_spans) in info.items():
                     split: Tuple[str, str, str] = self.split_by_flanks(seq, node_spans, flanks)
-                    if split is None:
-                        continue
+                    if contig == key[0]:
+                        ref_ind = ind
                     blocks.append((*split, contig))
+                    ind += 1
 
+                blocks[0], blocks[ref_ind] = blocks[ref_ind], blocks[0]
                 self.pretty_print(blocks, key, paths, log=log)
 
     def split_by_flanks(self, seq, node_spans, flanks):
         left_node, left_off, right_node, right_off = flanks
-        repeat_start = left_off
-        repeat_end = len(seq)
+        repeat_start = None
+        repeat_end = None
 
         for node, s, e in node_spans:
+            if (node == left_node or self.nodes[node] == self.nodes[left_node]) and repeat_start is None:
+                repeat_start = s + left_off
             if node == right_node:
                 repeat_end = s + right_off
+            # Fallbacks (important for graph weirdness)
+        if repeat_start is None:
+            #print(left_node, [x[0] for x in node_spans])
+            repeat_start = 0
+        if repeat_end is None:
+            repeat_end = len(seq)
+
         left = seq[:repeat_start]
         repeat = seq[repeat_start:repeat_end]
         right = seq[repeat_end:]
@@ -250,19 +242,13 @@ class Processing:
         max_left: int = max(len(l) for l, _, _, _ in blocks)
         max_rep: int = max(len(r) for _, r, _, _ in blocks)
         ref = ref_key[0]
-
         for left, rep, right, contig in blocks:
-            if contig == ref:
-                continue
             true_start: int = paths[ref_key][contig][0] + len(left)
             true_end: int = paths[ref_key][contig][1] - len(right)
-            print(
-                f"Found in {contig} at [ {true_start}, {true_end} ]:\n",
-                f"{left:>{max_left}}  "
-                f"{rep:<{max_rep}}  "
-                f"{right}",
-                file=log
-            )
+            if contig != ref:
+                print(f"Found in {contig} at [ {true_start}, {true_end} ]:", file=log)
+            print(f"{left:>{max_left}}  {rep:<{max_rep}}  {right}", file=log)
+        print(file=log)
 
 
 if __name__ == "__main__":
@@ -273,7 +259,7 @@ if __name__ == "__main__":
     args = parser.parse_args()
     g, r, l = args.graph, args.repeats, args.log
     processing = Processing(g, r, l)
-    import time
-    start = time.time()
-    processing.analysis(-1, 1, 3)
-    print("Computation ended in %f seconds" % (time.time() - start))
+    #import time
+    #start = time.time()
+    processing.analysis(-1, 1, 2)
+    #print("Computation ended in %f seconds" % (time.time() - start))
