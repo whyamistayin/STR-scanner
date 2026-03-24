@@ -1,13 +1,19 @@
+"""
+A script for mapping tandem repeat loci predictions from the reference to the graph and path reconstruction.
+"""
 import argparse
+import numpy as np
 from typing import Tuple, List, Dict, Set, Optional
-from collections import defaultdict
+from collections import defaultdict, Counter
+from sys import stdin
 
 class Processing:
 
-    def __init__(self, graph_file: str, repeat_file: str, logfile: str) -> None:
+    def __init__(self, repeat_file: str, logfile: str, chromosome: str, reference: str) -> None:
         self.l = logfile
-        self.g = graph_file
         self.r = repeat_file
+        self.c = f"chr{chromosome}"
+        self.reference = reference
         self.nodes_ref_list: List[Tuple[int, str, int]] = []
         self.nodes_ref_ind: Dict[int, int] = {}
         self.nodes: Dict[int, str] = {}
@@ -15,7 +21,7 @@ class Processing:
         self.walks: Dict[Tuple[str, str], Dict[Tuple[int, int], List[int]]] = {}
         self.repeat_nodes: Dict[Tuple[str, int, int], Set[int]] = {}
         self.flanking_nodes: Dict[Tuple[str, int, int], Tuple[int, int, int, int]] = {}
-        self.pangenome_reading(graph_file)
+        self.pangenome_reading()
 
         def complementary(char: str) -> str:
             match char:
@@ -37,7 +43,7 @@ class Processing:
         self.tandem_reading(repeat_file)
 
     def __str__(self) -> str:
-        return " | ".join([self.g, self.r, self.l])
+        return " | ".join([self.r, self.l])
     
     __repr__ = __str__
 
@@ -60,9 +66,8 @@ class Processing:
                 state = 1
         return output
 
-    def pangenome_reading(self, graph_file: str) -> None:
-        graph = open(graph_file, 'r')
-        for line in graph.readlines():
+    def pangenome_reading(self) -> None:
+        for line in map(lambda x: x.strip(), stdin):
             if line.startswith("S"):
                 line = line.split()
                 id, contains = line[1:3]
@@ -80,14 +85,13 @@ class Processing:
                     self.walks[ref, con] = {(int(st), int(end)): processed[:]}
                 else:
                     self.walks[ref, con][int(st), int(end)] = processed[:]
-        graph.close()
 
     def _overlaps(self, start: int, end: int, i: int) -> bool:
         if not (0 <= i < len(self.nodes_ref_list)):
             return False
         st_node = self.nodes_ref_list[i][2]
         end_node = st_node + len(self.nodes_ref_list[i][1]) - 1
-        return start <= end_node and st_node <= end
+        return start <= end_node and st_node < end
     
     def binary_search_nodes(self, start: int, end: int) -> Tuple[Set[int], int, int]:
         len_l = len(self.nodes_ref_list)
@@ -99,7 +103,7 @@ class Processing:
                 break
             if self.nodes_ref_list[i][2] < start:
                 l = i + 1
-            elif self.nodes_ref_list[i][2] > end:
+            elif self.nodes_ref_list[i][2] >= end:
                 r = i - 1
             else:
                 raise IndexError()
@@ -130,24 +134,81 @@ class Processing:
         mem: List[Tuple[str, int, int, List[str]]] = []
         for line in file.readlines():
             contig, start, end, num, _, seq, _ = line.split()
+            start, end = map(int, (start, end))
             if len(seq) > 12 or is_telomere_motif(seq):
                 continue
-            start, end = map(int, (start, end))
-            if mem and end - mem[-1][2] <= 50 and contig == mem[-1][0]:
+            if mem and start - mem[-1][2] <= 50 and contig == mem[-1][0]:
                 p_contig, p_start, p_end, p_seq_l = mem.pop()
                 mem.append((p_contig, p_start, end, p_seq_l + [seq]))
                 continue
             mem.append((contig, start, end, [seq]))
         for contig, start, end, seq_l in mem:
             nodes_sequence, left_flanking, right_flanking = self.binary_search_nodes(start, end)
+
+            #if (start, end) in [(10911966, 10911975), (11018316, 11018333)]:
+                #print(start, end, '\n', nodes_sequence, '\n', '\n'.join(map(lambda x : self.nodes[x], nodes_sequence)))
             if len(nodes_sequence) > 1:
                 self.repeat_nodes[contig, start, end] = nodes_sequence
                 self.repeat_motif[contig, start, end] = seq_l
                 left_split = start - self.nodes_ref_ind[left_flanking]
                 right_split = end - self.nodes_ref_ind[right_flanking]
                 self.flanking_nodes[contig, start, end] = (left_flanking, left_split, right_flanking, right_split)
+            #else:
+                #print(self.c)
+        #print(self.repeat_nodes.keys(), self.database_ref.keys())
         mem.clear()
         file.close()
+
+    def _entropy(self, counter: Counter) -> float:
+        counts = np.array(list(counter.values()), dtype=float)
+        probs = counts / counts.sum()
+        entropy = -np.sum(probs * np.log2(probs))
+        return float(entropy)
+
+    def _move_left_flank(self, first_node_ind: int, walk: List[int], left_flank: str) -> Tuple[str, str]:
+        moving_ind: int = 0
+        i_beg: int = first_node_ind
+        len_left: int = len(left_flank)
+        while True:
+            # print(moving_ind)
+            while (len_left - moving_ind) < 50 and i_beg >= 0:
+                len_left += len(self.nodes[abs(walk[i_beg])])
+                left_flank = self.rev_if_neg(walk[i_beg]) + left_flank
+                i_beg -= 1
+            if i_beg < 0 and moving_ind >= len(left_flank):
+                break
+            tuples_counts = Counter(
+                [left_flank[i:i + 3] for i in range((len_left - moving_ind) - 10, (len_left - moving_ind) - 2)])
+            entropy = self._entropy(tuples_counts)
+            if entropy < 2.77:
+                moving_ind += 1
+            else:
+                break
+        boundary = len_left - moving_ind
+        left_flank_final = left_flank[boundary - 50:boundary]
+        repeat_prefix = left_flank[boundary:]
+        return left_flank_final, repeat_prefix
+
+    def _move_right_flank(self, first_node_ind: int, walk: List[int], right_flank: str) -> Tuple[str, str]:
+        moving_ind: int = 0
+        i_end: int = first_node_ind
+        len_right: int = len(right_flank)
+        while True:
+            # print(moving_ind)
+            while (len_right - moving_ind) < 50 and i_end < len(walk):
+                len_right += len(self.nodes[abs(walk[i_end])])
+                right_flank += self.rev_if_neg(walk[i_end])
+                i_end += 1
+            # print(right_flank)
+            if i_end == len(walk) and moving_ind >= len(right_flank):
+                break
+            tuples_counts = Counter([right_flank[i:i + 3] for i in range(moving_ind, moving_ind + 8)])
+            entropy = self._entropy(tuples_counts)
+            if entropy < 2.77:
+                moving_ind += 1
+            else:
+                break
+        return right_flank[moving_ind:moving_ind + 50], right_flank[:moving_ind]
 
     def _evaluate(self,
             i: int,
@@ -160,10 +221,8 @@ class Processing:
             ref_key: Tuple[str, int, int],
             paths: Dict[Tuple[str, int, int], Dict[str, Tuple[int, int]]],
             paths_seqs: Dict[Tuple[str, int, int], Dict[str, Tuple[str, str, str]]],
-            contig: str,
-            divisions: Dict[Tuple[str, int, int], Dict[str, Set[int]]]) -> None:
-        nodes = self.nodes
-        rev_if_neg = lambda x: nodes[-x][::-1] if x < 0 else nodes[x]
+            genome: str,
+            ) -> None:
         ref_contig, start, end = ref_key
         score: int = threshold + match_score * 2
         stack: List[int] = []
@@ -177,45 +236,41 @@ class Processing:
             stack.append(walk[k])
         while abs(stack[-1]) not in nodes_rf:
             stack.pop()
+        #if (start, end) in [(10911966, 10911975), (11018316, 11018333)]:
+            #print(start, end, '\n', stack, '\n', '\n'.join(map(lambda x : self.nodes[x], stack)))
         node_spans: List[Tuple[int, int, int]] = []
         cursor: int = 0
         seq: str = ""
         for x in stack:
-            s = rev_if_neg(x)
+            s = self.rev_if_neg(x)
             seq += s
             node_spans.append((abs(x), cursor, cursor + len(s)))
             cursor += len(s)
-        current_start: int = current
-        current_end: int = current_start + len(seq)
         flanks: Tuple[int, int, int, int] = self.flanking_nodes[ref_key]
         left, repeat, right = self.split_by_flanks(seq, node_spans, flanks)
-        len_left = len(left)
-        local_divisions: Set[int] = {x[1] - len_left for x in node_spans if len_left < x[1]}
-        #if len(local_divisions) <= 1:
-            #print(" ".join(map(lambda x : self.nodes[abs(x)], stack)))
-        i_beg = i - 1
-        while len_left < 50 and i_beg >= 0:
-            len_left += len(self.nodes[abs(walk[i_beg])])
-            i_beg  -= 1
-        if i_beg < i:
-            left = ("".join(map(rev_if_neg, walk[i_beg:i]))+left)[-50:]
-        right_len = len(right)
-        i_end = i + len(stack) + 1
-        while right_len < 50 and i_end < len(walk):
-            right_len += len(self.nodes[abs(walk[i_end])])
-            i_end += 1
-        if i_end > i + len(stack):
-            right = (right+"".join(map(rev_if_neg, walk[i+len(stack):i_end])))[:50]
-
+        #if (start, end) in [(10911966, 10911975), (11018316, 11018333)]:
+            #print(start, end, '\n', flanks)
+        #if current_start == 127453829:
+            #print(f"start {current_start}")
+        if i - 1 >= 0:
+            new_left, rep_add = self._move_left_flank(i - 1, walk, left)
+            left = new_left
+            repeat = rep_add + repeat
+            #print("left")
+        if i + len(stack) < len(walk):
+            new_right, rep_add = self._move_right_flank(i + len(stack), walk, right)
+            repeat += rep_add
+            right = new_right
+            #print("right")
+        current_start = current + len(left)
+        current_end = current_start + len(repeat)
         if (ref_contig, start, end) not in paths:
-            paths[ref_contig, start, end] = {contig: (current_start, current_end)}
-            paths_seqs[ref_contig, start, end] = {contig: (left, repeat, right)}
-            divisions[ref_contig, start, end] = {contig: local_divisions}
-        elif contig not in paths[ref_contig, start, end] or (paths[ref_contig, start, end][contig][1] -
-                paths[ref_contig, start, end][contig][0]) < current_end - current_start:
-            paths[ref_contig, start, end][contig] = (current_start, current_end)
-            paths_seqs[ref_contig, start, end][contig] = (left, repeat, right)
-            divisions[ref_contig, start, end][contig] = local_divisions
+            paths[ref_contig, start, end] = {genome: (current_start, current_end)}
+            paths_seqs[ref_contig, start, end] = {genome: (left, repeat, right)}
+        elif genome not in paths[ref_contig, start, end] or (paths[ref_contig, start, end][genome][1] -
+                paths[ref_contig, start, end][genome][0]) < current_end - current_start:
+            paths[ref_contig, start, end][genome] = (current_start, current_end)
+            paths_seqs[ref_contig, start, end][genome] = (left, repeat, right)
 
 
     def analysis(
@@ -224,19 +279,21 @@ class Processing:
             match_score: int,
             threshold: int
     ):
+        self.rev_if_neg = lambda x: self.nodes[-x][::-1] if x < 0 else self.nodes[x]
         self.nodes_ref_ind.clear()
         self.nodes_ref_list.clear()
         node_occurrences = defaultdict(list)
-        for (_, contig), nodes_dict in self.walks.items():
+        for (gen, contig), nodes_dict in self.walks.items():
             for (start_w, _), walk in nodes_dict.items():
+                start_n = start_w
                 for i, node in enumerate(walk):
-                    node_occurrences[node].append((walk, i, start_w, contig))
+                    node_occurrences[node].append((walk, i, start_n, gen))
+                    start_n += len(self.nodes[abs(node)])
         paths: Dict[Tuple[str, int, int], Dict[str, Tuple[int, int]]] = {}
         paths_seqs: Dict[Tuple[str, int, int], Dict[str, Tuple[str, str, str]]] = {}
-        divisions: Dict[Tuple[str, int, int], Dict[str, Set[int]]] = {}
         for ref_key, nodes_rf in self.repeat_nodes.items():
             for node in nodes_rf:
-                for walk, i, start_w, contig in node_occurrences.get(node, []):
+                for walk, i, start_n, gen in node_occurrences.get(node, []):
                     self._evaluate(
                         i=i,
                         walk=walk,
@@ -244,12 +301,11 @@ class Processing:
                         match_score=match_score,
                         mismatch_penalty=mismatch_penalty,
                         nodes_rf=nodes_rf,
-                        current=start_w,
+                        current=start_n,
                         ref_key=ref_key,
                         paths=paths,
                         paths_seqs=paths_seqs,
-                        contig=contig,
-                        divisions=divisions
+                        genome=gen
                     )
         with open(self.l, 'w') as log:
             for key, info in paths_seqs.items():
@@ -261,14 +317,15 @@ class Processing:
                 blocks: List[Tuple[str, str, str, str]] = []
                 ref_ind: Optional[int] = None
                 ind: int = 0
-                for contig, (left, repeat, right) in info.items():
-                    if contig == key[0]:
+                for genome, (left, repeat, right) in info.items():
+                    if genome == self.reference:
                         ref_ind = ind
-                    blocks.append((left, repeat, right, contig))
+                    blocks.append((left, repeat, right, genome))
                     ind += 1
                 del ind
-                blocks[0], blocks[ref_ind] = blocks[ref_ind], blocks[0]
-                self.pretty_print(blocks, key, paths, divisions, log=log)
+                if ref_ind is not None:
+                    blocks[0], blocks[ref_ind] = blocks[ref_ind], blocks[0]
+                self.pretty_print(blocks, key, paths, log=log)
 
     def split_by_flanks(self, seq: str, node_spans, flanks) -> Tuple[str, str, str]:
         left_node, left_off, right_node, right_off = flanks
@@ -290,40 +347,30 @@ class Processing:
         left = seq[:repeat_start]
         repeat = seq[repeat_start:repeat_end]
         right = seq[repeat_end:]
-        return left[:50] , repeat, right[:50]
+        return left[-50:], repeat, right[:50]
 
     def pretty_print(self, blocks: List[Tuple[str, str, str, str]], ref_key: Tuple[str, int, int],
-                     paths: Dict[Tuple[str, int, int], Dict[str, Tuple[int, int]]],
-                     divisions: Dict[Tuple[str, int, int], Dict[str, Set[int]]], log):
-        max_rep: int = 0
-        for n, (l, t, r, contig) in enumerate(blocks):
-            new_t = ""
-            for m, x in enumerate(t):
-                if m in divisions[ref_key][contig]:
-                    new_t += '_'
-                new_t += x
-            if len(new_t) > max_rep:
-                max_rep = len(new_t)
-            blocks[n] = (l, new_t, r, contig)
+                     paths: Dict[Tuple[str, int, int], Dict[str, Tuple[int, int]]], log):
+        max_rep: int = max(len(t) for _, t, _, _ in blocks)
         max_left: int = max(len(l) for l, _, _, _ in blocks)
-        ref = ref_key[0]
-        for left, rep, right, contig in blocks:
-            approx_start: int = paths[ref_key][contig][0]
-            approx_end: int = paths[ref_key][contig][1]
-            if contig != ref:
-                print(f"Found in {contig} at [ {approx_start}, {approx_end} ]:", file=log)
+        for left, rep, right, gen in blocks:
+            approx_start: int = paths[ref_key][gen][0]
+            approx_end: int = paths[ref_key][gen][1]
+            if gen != self.reference:
+                print(f"Found in {gen} at [ {approx_start}, {approx_end} ]:", file=log)
             print(f"{left:>{max_left}}  {rep:<{max_rep}}  {right}", file=log)
         print(file=log)
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument('-g', "--graph", required=True, help="pangenome-graph")
     parser.add_argument('-r', "--repeats", required=True, help="tandem-repeats")
     parser.add_argument('-l', "--log", required=True, help="logfile")
+    parser.add_argument('-c', "--chr", required=True, help="logfile")
+    parser.add_argument("--ref", required=True, help="reference genome")
     args = parser.parse_args()
-    g, r, l = args.graph, args.repeats, args.log
-    processing = Processing(g, r, l)
+    r, l, c, ref = args.repeats, args.log, args.chr, args.ref
+    processing = Processing(r, l, c, ref)
     #import time
     #start = time.time()
     processing.analysis(-1, 1, 2)
