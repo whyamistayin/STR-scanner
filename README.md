@@ -20,9 +20,8 @@ Make sure the following tools are installed and available in your environment:
 - `bash`
 - `python3`
 - `seqtk`
-- `awk`, `grep`, `zcat`
 - `docker` (required for running Cactus)
-- `Tantan`
+- `Tantan` (at https://gitlab.com/mcfrith/tantan)
 - paternal and maternal hg002 reference (named `hg002.pat.fasta` and `hg002.mat.fasta` with chromosomes named "chr{i}")
 - Python and Bash scripts:
   - `extract_names.py`
@@ -41,11 +40,17 @@ quay.io/comparative-genomics-toolkit/cactus:latest
 
 A script called `download.sh` is expected to download genome assemblies into the following structure:
 
-./raw_data/*/*/*/*/*_genomic.fna.gz
+./raw_data/\*/\*/\*/\*/*_genomic.fna
 
 Run:
 
 bash download.sh
+
+You can download as many assemblies as you can by changing the number in script. Default is 10.
+It is recommended to use as many assemblies as you can, because using too few assemblies decreases quality of predictions
+(due to lack of information). Each assembly takes up approximately 3 Gb of memory, so make sure you
+have space on your disk. It is also recommended to have at least 50 Gb of extra space for Cactus-pangenome
+computation.
 
 ---
 
@@ -114,8 +119,6 @@ For each chromosome (1–22):
 ## Pipeline Summary
 
 download.sh  →  preprocessing.sh  →  run.sh
-     ↓               ↓                 ↓
- raw_data      filtered + split     analysis results
 
 ---
 

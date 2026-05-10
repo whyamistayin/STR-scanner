@@ -6,6 +6,7 @@ import numpy as np
 from typing import Tuple, List, Dict, Set, Optional
 from collections import defaultdict, Counter
 from sys import stdin
+from collections import deque
 
 class Processing:
 
@@ -169,16 +170,21 @@ class Processing:
         moving_ind: int = 0
         i_beg: int = first_node_ind
         len_left: int = len(left_flank)
+        parts_list: deque[str] = deque()
         while True:
             # print(moving_ind)
             while (len_left - moving_ind) < 50 and i_beg >= 0:
                 len_left += len(self.nodes[abs(walk[i_beg])])
-                left_flank = self.rev_if_neg(walk[i_beg]) + left_flank
+                #left_flank = self.rev_if_neg(walk[i_beg]) + left_flank
+                parts_list.appendleft(self.rev_if_neg(walk[i_beg]))
                 i_beg -= 1
             if i_beg < 0 and moving_ind >= len(left_flank):
                 break
+            left_flank = "".join(parts_list) + left_flank
+            parts_list.clear()
             tuples_counts = Counter(
-                [left_flank[i:i + 3] for i in range((len_left - moving_ind) - 10, (len_left - moving_ind) - 2)])
+                [left_flank[i:i + 3] for i in range((len_left - moving_ind) - 10, (len_left - moving_ind) - 2)]
+            )
             entropy = self._entropy(tuples_counts)
             if entropy < 2.77:
                 moving_ind += 1
@@ -193,19 +199,22 @@ class Processing:
         moving_ind: int = 0
         i_end: int = first_node_ind
         len_right: int = len(right_flank)
+        parts_list: deque[str] = deque()
         while True:
             # print(moving_ind)
             while (len_right - moving_ind) < 50 and i_end < len(walk):
                 len_right += len(self.nodes[abs(walk[i_end])])
-                right_flank += self.rev_if_neg(walk[i_end])
+                parts_list.append(self.rev_if_neg(walk[i_end]))
                 i_end += 1
             # print(right_flank)
             if i_end == len(walk) and moving_ind >= len(right_flank):
                 break
+            right_flank += "".join(parts_list)
+            parts_list.clear()
             tuples_counts = Counter([right_flank[i:i + 3] for i in range(moving_ind, moving_ind + 8)])
             entropy = self._entropy(tuples_counts)
             if entropy < 2.77:
-                moving_ind += 1
+                moving_ind += 4
             else:
                 break
         return right_flank[moving_ind:moving_ind + 50], right_flank[:moving_ind]
@@ -309,11 +318,6 @@ class Processing:
                     )
         with open(self.l, 'w') as log:
             for key, info in paths_seqs.items():
-                print(
-                    f"Tandem repeat motif 5'-{"-*-".join(self.repeat_motif[key])}"
-                    f"-3'\nIn {key[0]} at [ {key[1]}, {key[2]} ]:",
-                    file=log
-                )
                 blocks: List[Tuple[str, str, str, str]] = []
                 ref_ind: Optional[int] = None
                 ind: int = 0
@@ -325,7 +329,13 @@ class Processing:
                 del ind
                 if ref_ind is not None:
                     blocks[0], blocks[ref_ind] = blocks[ref_ind], blocks[0]
+                print(
+                    f"Tandem repeat motif 5'-{"-*-".join(self.repeat_motif[key])}"
+                    f"-3'\nIn {key[0]} at [ {paths[key][self.reference][0]}, {paths[key][self.reference][1]} ]:",
+                    file=log
+                )
                 self.pretty_print(blocks, key, paths, log=log)
+            #print(len(paths))
 
     def split_by_flanks(self, seq: str, node_spans, flanks) -> Tuple[str, str, str]:
         left_node, left_off, right_node, right_off = flanks
@@ -347,7 +357,7 @@ class Processing:
         left = seq[:repeat_start]
         repeat = seq[repeat_start:repeat_end]
         right = seq[repeat_end:]
-        return left[-50:], repeat, right[:50]
+        return left, repeat, right
 
     def pretty_print(self, blocks: List[Tuple[str, str, str, str]], ref_key: Tuple[str, int, int],
                      paths: Dict[Tuple[str, int, int], Dict[str, Tuple[int, int]]], log):
