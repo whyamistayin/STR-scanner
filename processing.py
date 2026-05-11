@@ -257,22 +257,19 @@ class Processing:
             cursor += len(s)
         flanks: Tuple[int, int, int, int] = self.flanking_nodes[ref_key]
         left, repeat, right = self.split_by_flanks(seq, node_spans, flanks)
-        #if (start, end) in [(10911966, 10911975), (11018316, 11018333)]:
-            #print(start, end, '\n', flanks)
-        #if current_start == 127453829:
-            #print(f"start {current_start}")
-        if i - 1 >= 0:
-            new_left, rep_add = self._move_left_flank(i - 1, walk, left)
-            left = new_left
-            repeat = rep_add + repeat
-            #print("left")
-        if i + len(stack) < len(walk):
-            new_right, rep_add = self._move_right_flank(i + len(stack), walk, right)
-            repeat += rep_add
-            right = new_right
-            #print("right")
         current_start = current + len(left)
         current_end = current_start + len(repeat)
+        if i - 1 >= 0:
+            new_left, rep_add = self._move_left_flank(i - 1, walk, left)
+            current_start -= len(rep_add)
+            left = new_left
+            repeat = rep_add + repeat
+            # print("left")
+        if i + len(stack) < len(walk):
+            new_right, rep_add = self._move_right_flank(i + len(stack), walk, right)
+            current_end += len(rep_add)
+            repeat += rep_add
+            right = new_right
         if (ref_contig, start, end) not in paths:
             paths[ref_contig, start, end] = {genome: (current_start, current_end)}
             paths_seqs[ref_contig, start, end] = {genome: (left, repeat, right)}
@@ -317,6 +314,7 @@ class Processing:
                         genome=gen
                     )
         with open(self.l, 'w') as log:
+            #counter = 0
             for key, info in paths_seqs.items():
                 blocks: List[Tuple[str, str, str, str]] = []
                 ref_ind: Optional[int] = None
@@ -329,13 +327,18 @@ class Processing:
                 del ind
                 if ref_ind is not None:
                     blocks[0], blocks[ref_ind] = blocks[ref_ind], blocks[0]
+                ref_len = len(blocks[0][1])
+                if all(map(lambda x: len(x[1]) == ref_len, blocks)):  # if they have equal length by chance
+                    if len(set(map(lambda x: x[1], blocks))) == 1: # and they are equal strings
+                        continue # then we do not consider them
+                #counter += 1
                 print(
                     f"Tandem repeat motif 5'-{"-*-".join(self.repeat_motif[key])}"
                     f"-3'\nIn {key[0]} at [ {paths[key][self.reference][0]}, {paths[key][self.reference][1]} ]:",
                     file=log
                 )
                 self.pretty_print(blocks, key, paths, log=log)
-            #print(len(paths))
+            #print(counter)
 
     def split_by_flanks(self, seq: str, node_spans, flanks) -> Tuple[str, str, str]:
         left_node, left_off, right_node, right_off = flanks
